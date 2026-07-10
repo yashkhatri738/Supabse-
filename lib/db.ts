@@ -1,15 +1,29 @@
 import postgres from 'postgres'
 import { createAdminClient } from './admin'
 
-export function getConnectionString(supabaseUrl: string, password: string, direct = false) {
+export function getConnectionString(supabaseUrl: string, password: string, dbHost?: string, direct = false) {
   // Extract project ref (e.g., https://hfprjaricsitvloflvhw.supabase.co -> hfprjaricsitvloflvhw)
   const match = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.(?:co|net)/)
   if (!match) {
     throw new Error(`Invalid Supabase URL format: ${supabaseUrl}`)
   }
   const ref = match[1]
-  const port = direct ? 5432 : 6543
-  return `postgresql://postgres:${encodeURIComponent(password)}@db.${ref}.supabase.co:${port}/postgres?sslmode=require`
+  
+  // Use user-provided host or fall back to default direct host
+  let host = dbHost ? dbHost.trim() : `db.${ref}.supabase.co`
+  
+  // Determine port and user
+  let port = direct ? 5432 : 6543
+  let user = 'postgres'
+  
+  if (host.includes('pooler.supabase.com')) {
+    user = `postgres.${ref}`
+  }
+  
+  // Clean host in case user included protocol or port
+  host = host.replace(/^postgresql:\/\//, '').split(':')[0]
+  
+  return `postgresql://${user}:${encodeURIComponent(password)}@${host}:${port}/postgres?sslmode=require`
 }
 
 export async function ensureConnectionsTableExists() {
@@ -20,7 +34,7 @@ export async function ensureConnectionsTableExists() {
     return
   }
 
-  let connectionString = getConnectionString(ourUrl, ourPassword, false) // try pooler
+  let connectionString = getConnectionString(ourUrl, ourPassword, undefined, false) // try pooler
   let sql = postgres(connectionString, { connect_timeout: 10, ssl: 'require' })
   
   try {
@@ -39,6 +53,8 @@ export async function ensureConnectionsTableExists() {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
       );
     `
+    // Ensure the new db_host column is added if it does not exist
+    await sql`ALTER TABLE connections ADD COLUMN IF NOT EXISTS db_host TEXT;`
     // Enable RLS for security
     await sql`ALTER TABLE connections ENABLE ROW LEVEL SECURITY;`
     console.log('Successfully checked/created connections table and enabled RLS via pooler.')
@@ -49,7 +65,7 @@ export async function ensureConnectionsTableExists() {
     } catch {}
 
     // Fallback to direct port 5432
-    connectionString = getConnectionString(ourUrl, ourPassword, true)
+    connectionString = getConnectionString(ourUrl, ourPassword, undefined, true)
     sql = postgres(connectionString, { connect_timeout: 10, ssl: 'require' })
     try {
       await sql`
@@ -67,6 +83,7 @@ export async function ensureConnectionsTableExists() {
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
         );
       `
+      await sql`ALTER TABLE connections ADD COLUMN IF NOT EXISTS db_host TEXT;`
       await sql`ALTER TABLE connections ENABLE ROW LEVEL SECURITY;`
       console.log('Successfully checked/created connections table and enabled RLS via direct port.')
     } catch (directError: any) {
@@ -79,8 +96,8 @@ export async function ensureConnectionsTableExists() {
   }
 }
 
-export async function pingClientDatabase(name: string, supabaseUrl: string, dbPassword: string) {
-  let connectionString = getConnectionString(supabaseUrl, dbPassword, false) // try pooler
+export async function pingClientDatabase(name: string, supabaseUrl: string, dbPassword: string, dbHost?: string) {
+  let connectionString = getConnectionString(supabaseUrl, dbPassword, dbHost, false) // try pooler
   let sql = postgres(connectionString, { connect_timeout: 15, ssl: 'require' })
 
   try {
@@ -103,13 +120,13 @@ export async function pingClientDatabase(name: string, supabaseUrl: string, dbPa
     `
     return { success: true }
   } catch (error: any) {
-    console.warn(`Failed to ping ${supabaseUrl} via pooler (port 6543), trying direct connection...`, error.message)
+    console.warn(`Failed to ping ${supabaseUrl} via pooler, trying direct/session connection...`, error.message)
     try {
       await sql.end()
     } catch {}
 
-    // Fallback: try direct port 5432
-    connectionString = getConnectionString(supabaseUrl, dbPassword, true)
+    // Fallback: try direct port / session port 5432
+    connectionString = getConnectionString(supabaseUrl, dbPassword, dbHost, true)
     sql = postgres(connectionString, { connect_timeout: 15, ssl: 'require' })
     try {
       await sql`
@@ -128,7 +145,7 @@ export async function pingClientDatabase(name: string, supabaseUrl: string, dbPa
       `
       return { success: true }
     } catch (directError: any) {
-      console.error(`Failed to ping ${supabaseUrl} via direct port (port 5432):`, directError.message)
+      console.error(`Failed to ping ${supabaseUrl} via direct/session port (port 5432):`, directError.message)
       return { success: false, error: directError.message || String(directError) }
     }
   } finally {
@@ -157,8 +174,8 @@ export async function runKeepAliveSync() {
     const results = []
 
     for (const conn of connections) {
-      console.log(`Pinging project: ${conn.name} (${conn.supabase_url})`)
-      const res = await pingClientDatabase(conn.name, conn.supabase_url, conn.db_password)
+      console.log(`Pinging project: ${conn.name} (${conn.supabase_url}) [Host: ${conn.db_host || 'default'}]`)
+      const res = await pingClientDatabase(conn.name, conn.supabase_url, conn.db_password, conn.db_host)
       
       const updateData: any = {
         status: res.success ? 'active' : 'failed',

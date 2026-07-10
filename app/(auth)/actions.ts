@@ -95,13 +95,14 @@ export async function saveConnectionAction(formData: FormData) {
   const dbPassword = formData.get('dbPassword') as string
   const anonKey = formData.get('anonKey') as string
   const serviceRoleKey = formData.get('serviceRoleKey') as string
+  const dbHost = formData.get('dbHost') as string
 
   if (!name || !supabaseUrl || !dbPassword || !anonKey || !serviceRoleKey) {
     return { success: false, error: 'All fields are required' }
   }
 
   // 1. Verify remote project connection & create table in target project
-  const pingRes = await pingClientDatabase(name, supabaseUrl, dbPassword)
+  const pingRes = await pingClientDatabase(name, supabaseUrl, dbPassword, dbHost)
   if (!pingRes.success) {
     return { success: false, error: `Failed to connect to target Supabase project: ${pingRes.error}` }
   }
@@ -116,7 +117,8 @@ export async function saveConnectionAction(formData: FormData) {
       anon_key: anonKey,
       service_role_key: serviceRoleKey,
       status: 'active',
-      last_pinged_at: new Date().toISOString()
+      last_pinged_at: new Date().toISOString(),
+      db_host: dbHost ? dbHost.trim() : null
     })
 
     if (insertError) {
@@ -141,7 +143,7 @@ export async function getConnectionsAction() {
     // Select non-sensitive fields to display in front-end
     const { data, error } = await adminClient
       .from('connections')
-      .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at')
+      .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at, db_host')
       .order('created_at', { ascending: false })
 
     if (error) {

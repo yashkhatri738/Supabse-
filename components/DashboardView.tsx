@@ -36,6 +36,7 @@ interface Connection {
   error_message: string | null
   last_pinged_at: string | null
   created_at: string
+  db_host: string | null
 }
 
 interface DashboardViewProps {
@@ -363,6 +364,12 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                       )}
                     </button>
                   </div>
+                  {conn.db_host && (
+                    <div className="flex items-center gap-1.5 text-[10px] font-mono text-purple-400 bg-purple-500/[0.02] border border-purple-500/10 px-3 py-1.5 rounded-lg">
+                      <span className="text-zinc-500">Host:</span>
+                      <span className="truncate flex-1">{conn.db_host}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Footer details */}
@@ -444,6 +451,23 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                   className="h-10 border-white/5 bg-zinc-900/50 text-white placeholder-zinc-600 focus:border-purple-500 focus:ring-purple-500/10 transition-all rounded-xl text-sm font-mono"
                   disabled={isLoading}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Database Host / Pooler Host</label>
+                  <span className="text-[9px] text-purple-400 font-semibold uppercase tracking-wider">Optional (Recommended for Vercel)</span>
+                </div>
+                <Input
+                  name="dbHost"
+                  type="text"
+                  placeholder="e.g. aws-0-us-east-1.pooler.supabase.com"
+                  className="h-10 border-white/5 bg-zinc-900/50 text-white placeholder-zinc-600 focus:border-purple-500 focus:ring-purple-500/10 transition-all rounded-xl text-sm font-mono"
+                  disabled={isLoading}
+                />
+                <p className="text-[9px] text-zinc-500 leading-normal">
+                  Required if deploying to IPv4-only host like Vercel. Paste the transaction/session pooler host from your Supabase settings to bypass IPv6 DNS errors.
+                </p>
               </div>
 
               <div className="space-y-2">
