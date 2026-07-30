@@ -461,12 +461,12 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                 <Input
                   name="dbHost"
                   type="text"
-                  placeholder="e.g. aws-0-us-east-1.pooler.supabase.com"
+                  placeholder="Defaults to aws-1-ap-southeast-1.pooler.supabase.com"
                   className="h-10 border-white/5 bg-zinc-900/50 text-white placeholder-zinc-600 focus:border-purple-500 focus:ring-purple-500/10 transition-all rounded-xl text-sm font-mono"
                   disabled={isLoading}
                 />
                 <p className="text-[9px] text-zinc-500 leading-normal">
-                  Required if deploying to IPv4-only host like Vercel. Paste the transaction/session pooler host from your Supabase settings to bypass IPv6 DNS errors.
+                  Leave empty to use aws-1-ap-southeast-1.pooler.supabase.com. Paste the transaction/session pooler host from your Supabase settings if your project lives in a different region — this bypasses IPv6 DNS errors on IPv4-only hosts like Vercel.
                 </p>
               </div>
 

@@ -5,6 +5,8 @@ import { createAdminClient } from '@/lib/admin'
 import { redirect } from 'next/navigation'
 import { ensureConnectionsTableExists, pingClientDatabase, runKeepAliveSync } from '@/lib/db'
 
+const DEFAULT_DB_HOST = 'aws-1-ap-southeast-1.pooler.supabase.com'
+
 export async function loginAction(formData: FormData) {
   const email = formData.get('email') as string
   const password = formData.get('password') as string
@@ -95,11 +97,14 @@ export async function saveConnectionAction(formData: FormData) {
   const dbPassword = formData.get('dbPassword') as string
   const anonKey = formData.get('anonKey') as string
   const serviceRoleKey = formData.get('serviceRoleKey') as string
-  const dbHost = formData.get('dbHost') as string
+  const dbHostInput = formData.get('dbHost') as string
 
   if (!name || !supabaseUrl || !dbPassword || !anonKey || !serviceRoleKey) {
     return { success: false, error: 'All fields are required' }
   }
+
+  // Fall back to the default pooler host so new credentials always resolve over IPv4
+  const dbHost = dbHostInput?.trim() || DEFAULT_DB_HOST
 
   // 1. Verify remote project connection & create table in target project
   const pingRes = await pingClientDatabase(name, supabaseUrl, dbPassword, dbHost)
@@ -118,7 +123,7 @@ export async function saveConnectionAction(formData: FormData) {
       service_role_key: serviceRoleKey,
       status: 'active',
       last_pinged_at: new Date().toISOString(),
-      db_host: dbHost ? dbHost.trim() : null
+      db_host: dbHost
     })
 
     if (insertError) {
