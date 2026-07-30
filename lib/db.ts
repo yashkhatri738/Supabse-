@@ -9,8 +9,8 @@ export function getConnectionString(supabaseUrl: string, password: string, dbHos
   }
   const ref = match[1]
   
-  // Use user-provided host or fall back to default direct host
-  let host = dbHost ? dbHost.trim() : `db.${ref}.supabase.co`
+  // Use user-provided host or fall back to process.env.DB_HOST or default IPv4 pooler host
+  let host = dbHost?.trim() || process.env.DB_HOST || 'aws-1-ap-southeast-1.pooler.supabase.com'
   
   // Determine port and user
   let port = direct ? 5432 : 6543
@@ -29,12 +29,13 @@ export function getConnectionString(supabaseUrl: string, password: string, dbHos
 export async function ensureConnectionsTableExists() {
   const ourUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const ourPassword = process.env.SUPABASE_DB_PASSWORD
+  const ourHost = process.env.DB_HOST || 'aws-1-ap-southeast-1.pooler.supabase.com'
   if (!ourUrl || !ourPassword) {
     console.error('Missing our own database configuration (.env.local)')
     return
   }
 
-  let connectionString = getConnectionString(ourUrl, ourPassword, undefined, false) // try pooler
+  let connectionString = getConnectionString(ourUrl, ourPassword, ourHost, false) // try pooler
   let sql = postgres(connectionString, { connect_timeout: 10, ssl: 'require' })
   
   try {
@@ -65,7 +66,7 @@ export async function ensureConnectionsTableExists() {
     } catch {}
 
     // Fallback to direct port 5432
-    connectionString = getConnectionString(ourUrl, ourPassword, undefined, true)
+    connectionString = getConnectionString(ourUrl, ourPassword, ourHost, true)
     sql = postgres(connectionString, { connect_timeout: 10, ssl: 'require' })
     try {
       await sql`
