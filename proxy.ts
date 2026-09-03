@@ -31,15 +31,17 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // This is required to refresh session cookies
+  // Refresh session cookies
   const { data: { user } } = await supabase.auth.getUser()
 
   const url = request.nextUrl.clone()
+  const pathname = url.pathname
 
-  // Protect routes: redirect to /login if not authenticated, redirect to / if authenticated and trying to access /login
-  const isLoginPage = url.pathname === '/login'
+  const isAuthPage = pathname === '/login' || pathname === '/signup'
+  const isPublicRoute = isAuthPage || pathname === '/how-it-works' || pathname.startsWith('/api/')
 
-  if (!user && !isLoginPage) {
+  // 1. If not logged in and accessing a private route (e.g. /), redirect to /login
+  if (!user && !isPublicRoute) {
     url.pathname = '/login'
     const redirectResponse = NextResponse.redirect(url)
     response.cookies.getAll().forEach((cookie) => {
@@ -48,7 +50,8 @@ export async function proxy(request: NextRequest) {
     return redirectResponse
   }
 
-  if (user && isLoginPage) {
+  // 2. If already logged in and accessing /login or /signup, redirect to dashboard /
+  if (user && isAuthPage) {
     url.pathname = '/'
     const redirectResponse = NextResponse.redirect(url)
     response.cookies.getAll().forEach((cookie) => {
@@ -68,7 +71,6 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - next.svg, vercel.svg (images)
-     * Feel free to modify this pattern to include more paths.
      */
     '/((?!_next/static|_next/image|favicon.ico|next.svg|vercel.svg).*)',
   ],

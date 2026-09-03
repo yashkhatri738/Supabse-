@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
+import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -23,9 +24,17 @@ import {
   User,
   Activity,
   Copy,
-  Check
+  Check,
+  HelpCircle
 } from 'lucide-react'
-import { saveConnectionAction, deleteConnectionAction, syncConnectionsAction, getConnectionsAction, logoutAction } from '@/app/(auth)/actions'
+import { 
+  saveConnectionAction, 
+  deleteConnectionAction, 
+  syncConnectionsAction, 
+  getConnectionsAction, 
+  logoutAction,
+  pingSingleConnectionAction
+} from '@/app/(auth)/actions'
 import { toast } from 'sonner'
 
 interface Connection {
@@ -52,6 +61,33 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
   const [searchQuery, setSearchQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [pingingId, setPingingId] = useState<string | null>(null)
+
+  // Ping a single connection immediately
+  async function handlePingSingle(conn: Connection) {
+    setPingingId(conn.id)
+    toast.loading(`Pinging ${conn.name}...`, { id: `ping-${conn.id}` })
+    try {
+      const res = await pingSingleConnectionAction(conn.id)
+      if (res && res.success) {
+        toast.success(`Pinged ${conn.name} successfully! (${res.durationMs || 0}ms)`, { 
+          id: `ping-${conn.id}`,
+          duration: 4000 
+        })
+        await refreshConnections()
+      } else {
+        toast.error(`Ping failed for ${conn.name}: ${res?.error || 'Unknown error'}`, { 
+          id: `ping-${conn.id}`,
+          duration: 6000 
+        })
+        await refreshConnections()
+      }
+    } catch (err: any) {
+      toast.error(`Ping execution error: ${err.message || err}`, { id: `ping-${conn.id}` })
+    } finally {
+      setPingingId(null)
+    }
+  }
 
   // Reload connections from DB
   async function refreshConnections() {
@@ -78,10 +114,23 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
       const res = await saveConnectionAction(formData)
       if (res && res.error) {
         setError(res.error)
-        toast.error('Failed to register project')
+        toast.error('Failed to register project: ' + res.error)
       } else {
-        toast.success('Supabase project registered and verified!')
         setIsModalOpen(false)
+        await refreshConnections()
+        
+        // Immediately run initial keep-alive sync with live progress toast
+        toast.loading('Running initial keep-alive sync...', { id: 'init-sync' })
+        try {
+          const syncRes = await syncConnectionsAction()
+          if (syncRes && syncRes.success) {
+            toast.success('Project added & keep-alive verified active!', { id: 'init-sync', duration: 4000 })
+          } else {
+            toast.success('Project registered! Scheduled for daily sync.', { id: 'init-sync', duration: 4000 })
+          }
+        } catch {
+          toast.success('Project registered successfully!', { id: 'init-sync' })
+        }
         await refreshConnections()
       }
     } catch (err: any) {
@@ -183,7 +232,16 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/how-it-works"
+              className="hidden sm:flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/5 bg-zinc-900/40 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer"
+              title="Learn how Supabase Forever works"
+            >
+              <HelpCircle className="h-3.5 w-3.5 text-purple-400" />
+              <span>How It Works</span>
+            </Link>
+
             {userEmail && (
               <div className="hidden sm:flex items-center gap-2 border border-white/5 bg-zinc-900/40 px-3 py-1 rounded-full text-xs text-zinc-400">
                 <User className="h-3 w-3 text-zinc-500" />
@@ -219,23 +277,22 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            <Button
+            <button
               onClick={handleSyncAll}
               disabled={isSyncing || connections.length === 0}
-              variant="outline"
-              className="bg-zinc-900/40 hover:bg-zinc-800/80 border border-white/5 text-zinc-300 font-medium px-4 h-10 transition-all rounded-xl flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              className="bg-zinc-900/60 hover:bg-zinc-800 border border-white/10 text-zinc-200 hover:text-white font-medium px-4 h-10 transition-all rounded-xl flex items-center gap-2 cursor-pointer disabled:opacity-50 text-xs sm:text-sm"
             >
-              <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              Run Sync
-            </Button>
+              <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin text-purple-400' : ''}`} />
+              <span>Run Sync</span>
+            </button>
 
-            <Button
+            <button
               onClick={() => setIsModalOpen(true)}
-              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium px-4 h-10 transition-all rounded-xl flex items-center gap-2 cursor-pointer border border-purple-500/20 shadow-lg shadow-purple-500/10"
+              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium px-4 h-10 transition-all rounded-xl flex items-center gap-2 cursor-pointer border border-purple-500/20 shadow-lg shadow-purple-500/10 text-xs sm:text-sm"
             >
               <Plus className="h-4 w-4" />
-              Add Project
-            </Button>
+              <span>Add Project</span>
+            </button>
           </div>
         </div>
 
@@ -340,13 +397,25 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                       }`} />
                     </div>
 
-                    <button
-                      onClick={() => handleDelete(conn.id, conn.name)}
-                      className="h-7 w-7 rounded-lg border border-white/5 bg-zinc-900/40 hover:bg-red-500/10 hover:border-red-500/20 text-zinc-500 hover:text-red-400 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
-                      title="Delete connection"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handlePingSingle(conn)}
+                        disabled={pingingId === conn.id || isSyncing}
+                        className="h-7 px-2.5 rounded-lg border border-white/5 bg-zinc-900/60 hover:bg-purple-500/10 hover:border-purple-500/30 text-zinc-400 hover:text-purple-300 flex items-center gap-1.5 text-[11px] font-medium transition-all cursor-pointer disabled:opacity-50"
+                        title="Ping this database now"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${pingingId === conn.id ? 'animate-spin text-purple-400' : ''}`} />
+                        <span>{pingingId === conn.id ? 'Pinging...' : 'Ping Now'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDelete(conn.id, conn.name)}
+                        className="h-7 w-7 rounded-lg border border-white/5 bg-zinc-900/40 hover:bg-red-500/10 hover:border-red-500/20 text-zinc-500 hover:text-red-400 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+                        title="Delete connection"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   {/* URL Row */}
@@ -453,22 +522,6 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                 />
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Database Host / Pooler Host</label>
-                  <span className="text-[9px] text-purple-400 font-semibold uppercase tracking-wider">Optional (Recommended for Vercel)</span>
-                </div>
-                <Input
-                  name="dbHost"
-                  type="text"
-                  placeholder="Defaults to aws-1-ap-southeast-1.pooler.supabase.com"
-                  className="h-10 border-white/5 bg-zinc-900/50 text-white placeholder-zinc-600 focus:border-purple-500 focus:ring-purple-500/10 transition-all rounded-xl text-sm font-mono"
-                  disabled={isLoading}
-                />
-                <p className="text-[9px] text-zinc-500 leading-normal">
-                  Leave empty to use aws-1-ap-southeast-1.pooler.supabase.com. Paste the transaction/session pooler host from your Supabase settings if your project lives in a different region — this bypasses IPv6 DNS errors on IPv4-only hosts like Vercel.
-                </p>
-              </div>
 
               <div className="space-y-2">
                 <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Postgres DB Password</label>
@@ -507,15 +560,6 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
                 </div>
               </div>
 
-              {/* Notice */}
-              <div className="rounded-xl bg-purple-500/[0.02] border border-purple-500/10 p-3 text-[11px] text-zinc-400 flex items-start gap-2 leading-relaxed">
-                <Terminal className="h-4 w-4 shrink-0 mt-0.5 text-purple-400" />
-                <div>
-                  <span className="font-bold text-white block mb-0.5">Automated table structure creation:</span>
-                  Connecting saves the project. It immediately validates the DB and initializes a <code className="bg-purple-500/10 px-1 rounded text-white font-mono">keep_alive</code> schema table to store periodic heartbeat records.
-                </div>
-              </div>
-
               {error && (
                 <div className="rounded-xl bg-red-500/[0.02] border border-red-500/15 p-3 text-[11px] text-red-400 font-mono">
                   <strong>Verification Error:</strong> {error}
@@ -523,33 +567,32 @@ export default function DashboardView({ initialConnections, userEmail }: Dashboa
               )}
 
               <div className="flex items-center justify-end gap-3 border-t border-white/5 pt-4">
-                <Button
+                <button
                   type="button"
                   onClick={() => {
                     setIsModalOpen(false)
                     setError(null)
                   }}
-                  variant="outline"
-                  className="h-9 border-white/5 hover:bg-zinc-900 text-zinc-400 hover:text-white rounded-xl text-xs cursor-pointer"
+                  className="h-9 px-4 rounded-xl border border-white/10 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
                   disabled={isLoading}
                 >
                   Cancel
-                </Button>
+                </button>
                 
-                <Button
+                <button
                   type="submit"
-                  className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium px-4 h-9 shadow-lg hover:shadow-purple-500/10 rounded-xl flex items-center justify-center gap-2 cursor-pointer text-xs border border-purple-500/20"
+                  className="h-9 px-5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs shadow-lg shadow-purple-900/30 hover:shadow-purple-600/30 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all border border-purple-400/20 disabled:opacity-50"
                   disabled={isLoading}
                 >
                   {isLoading ? (
                     <>
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
-                      Saving Project...
+                      <span>Saving Project...</span>
                     </>
                   ) : (
-                    'Verify & Save'
+                    <span>Verify & Save</span>
                   )}
-                </Button>
+                </button>
               </div>
 
             </form>

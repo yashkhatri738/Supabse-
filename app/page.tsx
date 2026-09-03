@@ -18,14 +18,17 @@ export default async function Home() {
   // 3. Load connections metadata (excluding secrets like passwords and service keys)
   let connections: any[] = []
   try {
-    const adminClient = createAdminClient()
-    const { data, error } = await adminClient
-      .from('connections')
-      .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at')
-      .order('created_at', { ascending: false })
+    if (user) {
+      const adminClient = createAdminClient()
+      const { data, error } = await adminClient
+        .from('connections')
+        .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at, db_host')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
 
-    if (!error && data) {
-      connections = data
+      if (!error && data) {
+        connections = data
+      }
     }
   } catch (err) {
     console.error('Failed to load initial connections:', err)

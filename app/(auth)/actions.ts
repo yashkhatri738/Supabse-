@@ -3,25 +3,23 @@
 import { createClient } from '@/lib/server'
 import { createAdminClient } from '@/lib/admin'
 import { redirect } from 'next/navigation'
-import { ensureConnectionsTableExists, pingClientDatabase, runKeepAliveSync } from '@/lib/db'
-
-const DEFAULT_DB_HOST = 'aws-1-ap-southeast-1.pooler.supabase.com'
+import { ensureConnectionsTableExists, pingClientDatabase, runKeepAliveSync, pingSingleConnection } from '@/lib/db'
 
 export async function loginAction(formData: FormData) {
-  const email = formData.get('email') as string
+  const email = (formData.get('email') as string)?.trim().toLowerCase()
   const password = formData.get('password') as string
 
   if (!email || !password) {
     return { error: 'Email and password are required' }
   }
 
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
   const adminPassword = process.env.ADMIN_PASSWORD
 
-  // Check if matching admin email
-  if (email === adminEmail) {
+  // Check if matching admin email configured in environment
+  if (adminEmail && email === adminEmail) {
     if (password !== adminPassword) {
-      return { error: 'Invalid credentials' }
+      return { error: 'Invalid email or password. Please check your credentials and try again.' }
     }
 
     // Check if the user already exists in Supabase Authentication
@@ -29,31 +27,28 @@ export async function loginAction(formData: FormData) {
       const adminClient = createAdminClient()
       const { data: { users }, error: listError } = await adminClient.auth.admin.listUsers()
       
-      if (listError) {
-        return { error: `Failed to verify user status: ${listError.message}` }
-      }
+      if (!listError) {
+        const exists = users?.some(u => u.email?.toLowerCase() === email)
 
-      const exists = users?.some(u => u.email === email)
+        if (!exists) {
+          // Auto-provision admin in Supabase Authentication on first login
+          const { error: createError } = await adminClient.auth.admin.createUser({
+            email,
+            password,
+            email_confirm: true,
+          })
 
-      if (!exists) {
-        // Save user in Supabase Authentication (first-time login)
-        const { error: createError } = await adminClient.auth.admin.createUser({
-          email,
-          password,
-          email_confirm: true,
-        })
-
-        if (createError) {
-          return { error: `Failed to register admin in Supabase: ${createError.message}` }
+          if (createError) {
+            console.error('Failed to provision admin:', createError.message)
+          }
         }
       }
     } catch (err: any) {
-      return { error: `Admin check/creation failed: ${err.message || err}` }
+      console.error('Admin provision error:', err)
     }
   }
 
   let success = false
-  // Standard login using the Supabase client
   try {
     const supabase = await createClient()
     const { error: loginError } = await supabase.auth.signInWithPassword({
@@ -62,16 +57,64 @@ export async function loginAction(formData: FormData) {
     })
 
     if (loginError) {
-      return { error: loginError.message }
+      // Return user-friendly error instead of raw Supabase string
+      return { error: 'Invalid email or password. Please check your credentials and try again.' }
     }
     success = true
   } catch (err: any) {
-    return { error: `Login execution failed: ${err.message || err}` }
+    return { error: 'Unable to connect to authentication server. Please try again.' }
   }
 
   if (success) {
     redirect('/')
   }
+}
+
+export async function signupAction(formData: FormData) {
+  const email = (formData.get('email') as string)?.trim().toLowerCase()
+  const password = formData.get('password') as string
+
+  if (!email || !password) {
+    return { error: 'Email and password are required' }
+  }
+
+  if (password.length < 6) {
+    return { error: 'Password must be at least 6 characters long' }
+  }
+
+  try {
+    const adminClient = createAdminClient()
+
+    // 1. Create the user with auto-confirmed email so they don't get blocked by email verification
+    const { error: createError } = await adminClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    })
+
+    if (createError) {
+      if (createError.message.toLowerCase().includes('already') || createError.message.toLowerCase().includes('exists')) {
+        return { error: 'An account with this email already exists. Please sign in instead.' }
+      }
+      return { error: createError.message }
+    }
+
+    // 2. Automatically sign them in immediately to establish session cookies
+    const supabase = await createClient()
+    const { error: loginError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+
+    if (loginError) {
+      return { error: 'Account created, but auto-login failed. Please sign in.' }
+    }
+  } catch (err: any) {
+    return { error: err.message || 'Registration failed. Please try again.' }
+  }
+
+  // Redirect directly to dashboard (never to login page)
+  redirect('/')
 }
 
 export async function logoutAction() {
@@ -97,25 +140,25 @@ export async function saveConnectionAction(formData: FormData) {
   const dbPassword = formData.get('dbPassword') as string
   const anonKey = formData.get('anonKey') as string
   const serviceRoleKey = formData.get('serviceRoleKey') as string
-  const dbHostInput = formData.get('dbHost') as string
 
   if (!name || !supabaseUrl || !dbPassword || !anonKey || !serviceRoleKey) {
     return { success: false, error: 'All fields are required' }
   }
 
-  // Fall back to the default pooler host so new credentials always resolve over IPv4
-  const dbHost = dbHostInput?.trim() || DEFAULT_DB_HOST
-
-  // 1. Verify remote project connection & create table in target project
-  const pingRes = await pingClientDatabase(name, supabaseUrl, dbPassword, dbHost)
+  // 1. Verify remote project connection & create keep_alive table in target project
+  // Auto-resolves working regional IPv4 pooler host dynamically
+  const pingRes = await pingClientDatabase(name, supabaseUrl, dbPassword)
   if (!pingRes.success) {
     return { success: false, error: `Failed to connect to target Supabase project: ${pingRes.error}` }
   }
 
-  // 2. Save credentials in our database via Admin client
+  const finalHost = pingRes.workingHost || null
+
+  // 2. Save credentials in our database linked to this specific user's account
   try {
     const adminClient = createAdminClient()
-    const { error: insertError } = await adminClient.from('connections').insert({
+    const { data: inserted, error: insertError } = await adminClient.from('connections').insert({
+      user_id: user.id,
       name,
       supabase_url: supabaseUrl,
       db_password: dbPassword,
@@ -123,14 +166,14 @@ export async function saveConnectionAction(formData: FormData) {
       service_role_key: serviceRoleKey,
       status: 'active',
       last_pinged_at: new Date().toISOString(),
-      db_host: dbHost
-    })
+      db_host: finalHost
+    }).select().single()
 
     if (insertError) {
       return { success: false, error: `Failed to save credentials in database: ${insertError.message}` }
     }
 
-    return { success: true }
+    return { success: true, detectedHost: finalHost, newConnection: inserted }
   } catch (err: any) {
     return { success: false, error: `Save failed: ${err.message || err}` }
   }
@@ -145,10 +188,11 @@ export async function getConnectionsAction() {
 
   try {
     const adminClient = createAdminClient()
-    // Select non-sensitive fields to display in front-end
+    // User isolation: each user ONLY sees connections that belong to their own user_id
     const { data, error } = await adminClient
       .from('connections')
-      .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at, db_host')
+      .select('id, name, supabase_url, status, error_message, last_pinged_at, created_at, db_host, user_id')
+      .eq('user_id', user.id)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -170,7 +214,12 @@ export async function deleteConnectionAction(id: string) {
 
   try {
     const adminClient = createAdminClient()
-    const { error } = await adminClient.from('connections').delete().eq('id', id)
+    // Ensure the user can only delete their own connection
+    const { error } = await adminClient
+      .from('connections')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id)
 
     if (error) {
       return { success: false, error: `Failed to delete connection: ${error.message}` }
@@ -192,3 +241,12 @@ export async function syncConnectionsAction() {
   return await runKeepAliveSync()
 }
 
+export async function pingSingleConnectionAction(id: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return { success: false, error: 'Unauthorized' }
+  }
+
+  return await pingSingleConnection(id)
+}
